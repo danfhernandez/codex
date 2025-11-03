@@ -94,8 +94,8 @@ client_request_definitions! {
         response: v2::ListModelsResponse,
     },
 
-    #[serde(rename = "account/login")]
-    #[ts(rename = "account/login")]
+    #[serde(rename = "account/login/start")]
+    #[ts(rename = "account/login/start")]
     LoginAccount {
         params: v2::LoginAccountParams,
         response: v2::LoginAccountResponse,
@@ -382,11 +382,17 @@ pub enum ServerNotification {
     #[strum(serialize = "account/rateLimits/updated")]
     AccountRateLimitsUpdated(RateLimitSnapshot),
 
+    #[serde(rename = "account/login/completed")]
+    #[ts(rename = "account/login/completed")]
+    #[strum(serialize = "account/login/completed")]
+    AccountLoginCompleted(v2::AccountLoginCompletedNotification),
+
     /// DEPRECATED NOTIFICATIONS below
     /// Authentication status changed
     AuthStatusChange(v1::AuthStatusChangeNotification),
 
     /// ChatGPT login flow completed
+    /// Deprecated: use `account/login/completed` instead.
     LoginChatGptComplete(v1::LoginChatGptCompleteNotification),
 
     /// The special session configured event for a new or resumed conversation.
@@ -398,6 +404,7 @@ impl ServerNotification {
         match self {
             ServerNotification::AccountUpdated(params) => serde_json::to_value(params),
             ServerNotification::AccountRateLimitsUpdated(params) => serde_json::to_value(params),
+            ServerNotification::AccountLoginCompleted(params) => serde_json::to_value(params),
             ServerNotification::AuthStatusChange(params) => serde_json::to_value(params),
             ServerNotification::LoginChatGptComplete(params) => serde_json::to_value(params),
             ServerNotification::SessionConfigured(params) => serde_json::to_value(params),
@@ -577,7 +584,7 @@ mod tests {
         };
         assert_eq!(
             json!({
-                "method": "account/login",
+                "method": "account/login/start",
                 "id": 2,
                 "params": {
                     "type": "apiKey",
@@ -597,7 +604,7 @@ mod tests {
         };
         assert_eq!(
             json!({
-                "method": "account/login",
+                "method": "account/login/start",
                 "id": 3,
                 "params": {
                     "type": "chatgpt"
