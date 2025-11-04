@@ -233,7 +233,7 @@ impl CodexMessageProcessor {
                 self.git_diff_to_origin(request_id, params.cwd).await;
             }
             ClientRequest::LoginApiKey { request_id, params } => {
-                self.login_api_key(request_id, params).await;
+                self.login_api_key_v1(request_id, params).await;
             }
             ClientRequest::LoginChatGpt {
                 request_id,
@@ -304,7 +304,7 @@ impl CodexMessageProcessor {
     async fn login_v2(&mut self, request_id: RequestId, params: LoginAccountParams) {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
-                self.login_api_key(request_id, LoginApiKeyParams { api_key })
+                self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
                     .await;
             }
             LoginAccountParams::ChatGpt => {
@@ -313,20 +313,22 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn login_api_key(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+    async fn login_api_key_common(
+        &mut self,
+        params: &LoginApiKeyParams,
+    ) -> std::result::Result<(), JSONRPCErrorError> {
         if matches!(
             self.config.forced_login_method,
             Some(ForcedLoginMethod::Chatgpt)
         ) {
-            let error = JSONRPCErrorError {
+            return Err(JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
                 message: "API key login is disabled. Use ChatGPT login instead.".to_string(),
                 data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
+            });
         }
 
+        // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
             if let Some(active) = guard.take() {
@@ -341,6 +343,19 @@ impl CodexMessageProcessor {
         ) {
             Ok(()) => {
                 self.auth_manager.reload();
+                Ok(())
+            }
+            Err(err) => Err(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to save api key: {err}"),
+                data: None,
+            }),
+        }
+    }
+
+    async fn login_api_key_v1(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+        match self.login_api_key_common(&params).await {
+            Ok(()) => {
                 self.outgoing
                     .send_response(request_id, LoginApiKeyResponse {})
                     .await;
@@ -352,12 +367,37 @@ impl CodexMessageProcessor {
                     .send_server_notification(ServerNotification::AuthStatusChange(payload))
                     .await;
             }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to save api key: {err}"),
-                    data: None,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn login_api_key_v2(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+        match self.login_api_key_common(&params).await {
+            Ok(()) => {
+                let response = codex_app_server_protocol::LoginAccountResponse::ApiKey {};
+                self.outgoing.send_response(request_id, response).await;
+
+                let payload_login_completed = AccountLoginCompletedNotification {
+                    login_id: None,
+                    success: true,
+                    error: None,
                 };
+                self.outgoing
+                    .send_server_notification(ServerNotification::AccountLoginCompleted(
+                        payload_login_completed,
+                    ))
+                    .await;
+
+                let payload_v2 = AccountUpdatedNotification {
+                    auth_method: self.auth_manager.auth().map(|auth| auth.mode),
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
+                    .await;
+            }
+            Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
@@ -519,7 +559,7 @@ impl CodexMessageProcessor {
                         };
 
                         let payload_v2 = AccountLoginCompletedNotification {
-                            login_id,
+                            login_id: Some(login_id),
                             success,
                             error: error_msg,
                         };
@@ -551,9 +591,9 @@ impl CodexMessageProcessor {
                         }
                     });
 
-                    let response = codex_app_server_protocol::LoginAccountResponse {
-                        login_id: Some(login_id),
-                        auth_url: Some(auth_url),
+                    let response = codex_app_server_protocol::LoginAccountResponse::ChatGpt {
+                        login_id,
+                        auth_url,
                     };
                     self.outgoing.send_response(request_id, response).await;
                 }

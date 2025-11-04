@@ -182,7 +182,7 @@ mod tests {
     fn verify_account_login_completed_notification_serialization() {
         let notification =
             ServerNotification::AccountLoginCompleted(AccountLoginCompletedNotification {
-                login_id: Uuid::nil(),
+                login_id: Some(Uuid::nil()),
                 success: true,
                 error: None,
             });
